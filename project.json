@@ -1,0 +1,20 @@
+{
+  "overview": "A billing web app for Cup Sambarani — manage a product catalog, create bills with GST, export as PDF, and browse past bill history.",
+  "features": [
+    "Product catalog with add/edit/delete",
+    "Bill creation with product dropdown selection",
+    "Automatic 18% GST and grand total calculation",
+    "Export bills as PDF",
+    "Bill history with full detail view"
+  ],
+  "category": "productivity",
+  "tags": [
+    "billing",
+    "invoicing",
+    "gst",
+    "pdf-export",
+    "product-catalog",
+    "small-business"
+  ],
+  "last_updated": "2026-04-16T14:46:46.571Z"
+}

@@ -1,0 +1,76 @@
+type Timestamp = int;
+type ProductId = nat;
+type Product = 
+ record {
+   gst: nat;
+   hsn: text;
+   id: ProductId;
+   name: text;
+   price: nat;
+   stock: nat;
+ };
+type ProducerSettings = 
+ record {
+   accountHolder: text;
+   accountNumber: text;
+   address: text;
+   authorisedSignatory: text;
+   bankName: text;
+   companyName: text;
+   gstNumber: text;
+   ifscCode: text;
+ };
+type LineItem = 
+ record {
+   amount: nat;
+   gst: nat;
+   gstAmount: nat;
+   hsn: text;
+   price: nat;
+   productId: ProductId;
+   productName: text;
+   quantity: nat;
+ };
+type CustomerId = nat;
+type Customer = 
+ record {
+   address: text;
+   id: CustomerId;
+   name: text;
+   phone: text;
+ };
+type BillId = nat;
+type Bill = 
+ record {
+   billNumber: text;
+   customerAddress: opt text;
+   customerId: opt CustomerId;
+   customerName: opt text;
+   date: Timestamp;
+   grandTotal: nat;
+   gstAmount: nat;
+   id: BillId;
+   lineItems: vec LineItem;
+   subtotal: nat;
+ };
+service : {
+  addCustomer: (name: text, address: text, phone: text) -> (Customer);
+  addProduct: (name: text, price: nat, stock: nat, gst: nat, hsn: text) ->
+   (Product);
+  deleteCustomer: (id: CustomerId) -> (bool);
+  deleteProduct: (id: ProductId) -> (bool);
+  getBill: (id: BillId) -> (opt Bill) query;
+  getCustomer: (id: CustomerId) -> (opt Customer) query;
+  getProducerSettings: () -> (opt ProducerSettings) query;
+  getProduct: (id: ProductId) -> (opt Product);
+  listBills: () -> (vec Bill) query;
+  listCustomers: () -> (vec Customer) query;
+  listProducts: () -> (vec Product) query;
+  saveBill: (customerName: opt text, customerId: opt CustomerId,
+   customerAddress: opt text, lineItems: vec LineItem) -> (Bill);
+  setProducerSettings: (settings: ProducerSettings) -> ();
+  updateCustomer: (id: CustomerId, name: text, address: text, phone: 
+   text) -> (bool);
+  updateProduct: (id: ProductId, name: text, price: nat, stock: nat, gst:
+   nat, hsn: text) -> (bool);
+}

@@ -1,0 +1,115 @@
+// Version: 3.0.0
+type BillId__994444545 = Nat;
+type Bill__951628961 =
+  {
+    billNumber : Text;
+    customerAddress : ?Text;
+    customerId : ?CustomerId__1015005394;
+    customerName : ?Text;
+    date : Timestamp__301639476;
+    grandTotal : Nat;
+    gstAmount : Nat;
+    id : BillId__994444545;
+    lineItems : [LineItem__285514535];
+    subtotal : Nat
+  };
+type CustomerId__1015005394 = Nat;
+type Customer__192853522 =
+  {address : Text; id : CustomerId__1015005394; name : Text; phone : Text};
+type Data__791452850<K, V> =
+  {var count : Nat__490723111; kvs : [var ?(K, V)]};
+type Internal__8484328<K, V> =
+  {children : [var ?Node__46230540<K, V>]; data : Data__791452850<K, V>};
+type Leaf__809889148<K, V> = {data : Data__791452850<K, V>};
+type LineItem__285514535 =
+  {
+    amount : Nat;
+    gst : Nat;
+    gstAmount : Nat;
+    hsn : Text;
+    price : Nat;
+    productId : ProductId__160010635;
+    productName : Text;
+    quantity : Nat
+  };
+type Map__158565046<K, V> = Map__297112838<K, V>;
+type Map__297112838<K, V> =
+  {var root : Node__46230540<K, V>; var size : Nat__490723111};
+type Map__605269027<K, V> = Map__158565046<K, V>;
+type Nat__490723111 = Nat__920180692;
+type Nat__920180692 = Nat;
+type Node__46230540<K, V> =
+  {#internal : Internal__8484328<K, V>; #leaf : Leaf__809889148<K, V>};
+type OldBill__814045144 =
+  {
+    billNumber : Text;
+    customerName : ?Text;
+    date : Timestamp__301639476;
+    grandTotal : Nat;
+    gstAmount : Nat;
+    id : BillId__994444545;
+    lineItems : [OldLineItem__227633377];
+    subtotal : Nat
+  };
+type OldLineItem__227633377 =
+  {
+    amount : Nat;
+    price : Nat;
+    productId : ProductId__160010635;
+    productName : Text;
+    quantity : Nat
+  };
+type OldProduct__278484740 =
+  {id : ProductId__160010635; name : Text; price : Nat; stock : Nat};
+type ProducerSettings__603867605 =
+  {
+    accountHolder : Text;
+    accountNumber : Text;
+    address : Text;
+    authorisedSignatory : Text;
+    bankName : Text;
+    companyName : Text;
+    gstNumber : Text;
+    ifscCode : Text
+  };
+type ProductId__160010635 = Nat;
+type Product__389207432 =
+  {
+    gst : Nat;
+    hsn : Text;
+    id : ProductId__160010635;
+    name : Text;
+    price : Nat;
+    stock : Nat
+  };
+type Timestamp__301639476 = Int;
+actor ({
+  in bills : Map__605269027<BillId__994444545, OldBill__814045144>;
+  in lastBillMonth : {var value : Text};
+  in monthlyBillCounter : {var value : Nat};
+  in nextBillId : {var value : Nat};
+  in nextProductId : {var value : Nat};
+  in products : Map__605269027<ProductId__160010635, OldProduct__278484740>
+}, {
+  stable bills :
+    {
+      var root : Node__46230540<BillId__994444545, Bill__951628961>;
+      var size : Nat__490723111
+    };
+  stable customers :
+    {
+      var root : Node__46230540<CustomerId__1015005394, Customer__192853522>;
+      var size : Nat__490723111
+    };
+  stable lastBillMonth : {var value : Text};
+  stable monthlyBillCounter : {var value : Nat};
+  stable nextBillId : {var value : Nat};
+  stable nextCustomerId : {var value : Nat};
+  stable nextProductId : {var value : Nat};
+  stable producerSettings : {var value : ?ProducerSettings__603867605};
+  stable products :
+    {
+      var root : Node__46230540<ProductId__160010635, Product__389207432>;
+      var size : Nat__490723111
+    }
+}) ;
