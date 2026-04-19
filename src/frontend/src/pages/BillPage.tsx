@@ -24,7 +24,6 @@ import { useProducerSettings } from "../hooks/useSettings";
 import type { Customer, LineItem, ProducerSettings, Product } from "../types";
 
 // ── Currency helper (rupee symbol, en-IN locale) ──────────────────────────────
-// Note: \u20B9 is the Indian Rupee sign ₹
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -33,22 +32,85 @@ function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
-// PDF uses \u20B9 directly with helvetica; modern jsPDF supports it via UTF-8.
-// If a square box appears in the PDF output it means the viewer font doesn't
-// support the glyph — use a PDF viewer with full Unicode support.
-const RS = "\u20B9";
+const RS = "Rs. ";
+
+// ── Amount in words (Indian number system) ────────────────────────────────────
+function numberToWords(amount: number): string {
+  const ones = [
+    "",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+    "Eight",
+    "Nine",
+    "Ten",
+    "Eleven",
+    "Twelve",
+    "Thirteen",
+    "Fourteen",
+    "Fifteen",
+    "Sixteen",
+    "Seventeen",
+    "Eighteen",
+    "Nineteen",
+  ];
+  const tens = [
+    "",
+    "",
+    "Twenty",
+    "Thirty",
+    "Forty",
+    "Fifty",
+    "Sixty",
+    "Seventy",
+    "Eighty",
+    "Ninety",
+  ];
+
+  function twoDigits(n: number): string {
+    if (n < 20) return ones[n];
+    return `${tens[Math.floor(n / 10)]}${n % 10 !== 0 ? ` ${ones[n % 10]}` : ""}`;
+  }
+
+  function threeDigits(n: number): string {
+    if (n >= 100) {
+      return `${ones[Math.floor(n / 100)]} Hundred${n % 100 !== 0 ? ` ${twoDigits(n % 100)}` : ""}`;
+    }
+    return twoDigits(n);
+  }
+
+  const n = Math.round(amount);
+  if (n === 0) return "Zero";
+
+  const crore = Math.floor(n / 10000000);
+  const lakh = Math.floor((n % 10000000) / 100000);
+  const thousand = Math.floor((n % 100000) / 1000);
+  const remainder = n % 1000;
+
+  let result = "";
+  if (crore > 0) result += `${threeDigits(crore)} Crore `;
+  if (lakh > 0) result += `${threeDigits(lakh)} Lakh `;
+  if (thousand > 0) result += `${threeDigits(thousand)} Thousand `;
+  if (remainder > 0) result += threeDigits(remainder);
+
+  return result.trim();
+}
 
 // ── Local line-item type for the form ────────────────────────────────────────
 interface LineItemForm {
   id: number;
   productId: bigint | null;
   productName: string;
-  price: number; // in rupees
+  price: number;
   quantity: number;
-  amount: number; // in rupees
-  gst: number; // percentage e.g. 18
+  amount: number;
+  gst: number;
   hsn: string;
-  gstAmount: number; // in rupees
+  gstAmount: number;
 }
 
 let lineItemCounter = 0;
@@ -134,12 +196,9 @@ function LineItemRow({
       className="grid grid-cols-12 gap-2 items-center py-3 border-b border-border last:border-0"
       data-ocid={`bill.line_item.${index + 1}`}
     >
-      {/* Serial */}
       <div className="col-span-1 text-center text-sm text-muted-foreground font-mono font-semibold">
         {index + 1}
       </div>
-
-      {/* Product dropdown */}
       <div className="col-span-4">
         <select
           value={item.productId?.toString() ?? ""}
@@ -155,8 +214,6 @@ function LineItemRow({
           ))}
         </select>
       </div>
-
-      {/* GST % */}
       <div className="col-span-1 text-center">
         <Badge
           variant="secondary"
@@ -165,8 +222,6 @@ function LineItemRow({
           {item.gst}%
         </Badge>
       </div>
-
-      {/* Qty stepper */}
       <div className="col-span-3 flex items-center gap-1">
         <Button
           type="button"
@@ -198,13 +253,9 @@ function LineItemRow({
           <Plus className="w-3 h-3" />
         </Button>
       </div>
-
-      {/* Amount */}
       <div className="col-span-2 text-right text-sm font-semibold font-mono text-foreground">
         {item.amount > 0 ? formatCurrency(item.amount) : "—"}
       </div>
-
-      {/* Remove */}
       <div className="col-span-1 flex justify-center">
         <Button
           type="button"
@@ -223,12 +274,32 @@ function LineItemRow({
   );
 }
 
-// ── PDF generation ────────────────────────────────────────────────────────────
+// ── PDF generation (Tax Invoice format) ──────────────────────────────────────
+async function loadImageAsDataUrl(src: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("Canvas 2D context unavailable"));
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
 async function exportBillPDF(bill: {
   billNumber: string;
   date: Date;
   customerName: string;
   customerAddress: string;
+  customerPhone?: string;
+  customerGstin?: string;
   lineItems: LineItemForm[];
   subtotal: number;
   totalGst: number;
@@ -238,245 +309,506 @@ async function exportBillPDF(bill: {
   const { default: jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
+  // Load peacock feather logo as base64 data URL
+  let logoDataUrl: string | null = null;
+  try {
+    logoDataUrl = await loadImageAsDataUrl(
+      "/assets/images/peacock-feather.png",
+    );
+  } catch {
+    // If logo fails to load, continue without it
+  }
+
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = 210;
-  const marginL = 14;
-  const marginR = pageW - 14;
+  const pageH = 297;
+  const bLeft = 10; // border left
+  const bRight = 200; // border right
+  const bTop = 10; // border top
+  const contentW = bRight - bLeft;
 
-  // ── Section 1: FROM (top-left) ───────────────────────────────────────────
+  // ── Outer border ──────────────────────────────────────────────────────────
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.5);
+  doc.rect(bLeft, bTop, contentW, pageH - 20);
+
+  // ── Row 1: TAX INVOICE title ─────────────────────────────────────────────
+  const titleY = bTop + 8;
+
+  // Draw peacock feather logo (PNG image) to the left of the title
+  if (logoDataUrl) {
+    doc.addImage(logoDataUrl, "PNG", bLeft + 2, bTop + 1, 18, 18);
+  }
+
+  doc.setDrawColor(0, 0, 0);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  const companyName = bill.settings?.companyName ?? "Cup Sambarani";
-  doc.text(companyName, marginL, 18);
+  doc.setFontSize(14);
+  doc.setTextColor(0, 0, 0);
+  doc.text("TAX INVOICE", pageW / 2, titleY, { align: "center" });
+
+  // Horizontal line below title
+  const titleLineY = titleY + 3;
+  doc.setLineWidth(0.3);
+  doc.line(bLeft, titleLineY, bRight, titleLineY);
+
+  // ── Header section: two columns ───────────────────────────────────────────
+  const headerTopY = titleLineY + 1;
+  const leftColW = contentW * 0.6;
+  const leftColRight = bLeft + leftColW;
+  const rightColLeft = leftColRight;
+
+  // Vertical divider between columns
+  const headerBottomY = headerTopY + 42;
+  doc.setLineWidth(0.3);
+  doc.line(leftColRight, headerTopY, leftColRight, headerBottomY);
+
+  // LEFT COLUMN: Company info
+  let lY = headerTopY + 6;
+  const companyName = bill.settings?.companyName ?? "VJ Traders";
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text(companyName, bLeft + 4, lY);
+  lY += 6;
 
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  let fromY = 24;
+  doc.setFontSize(8.5);
   if (bill.settings?.address) {
     const addrLines = doc.splitTextToSize(
       bill.settings.address,
-      85,
+      leftColW - 8,
     ) as string[];
-    doc.text(addrLines, marginL, fromY);
-    fromY += addrLines.length * 4.5;
+    for (const line of addrLines) {
+      doc.text(line, bLeft + 4, lY);
+      lY += 4.5;
+    }
   }
   if (bill.settings?.gstNumber) {
     doc.setFont("helvetica", "bold");
-    doc.text(`GSTIN: ${bill.settings.gstNumber}`, marginL, fromY);
+    doc.text(`GSTIN: ${bill.settings.gstNumber}`, bLeft + 4, lY);
     doc.setFont("helvetica", "normal");
-    fromY += 5;
+    lY += 4.5;
   }
 
-  // ── Section 2: Bill header (top-right) ──────────────────────────────────
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
-  doc.setTextColor(180, 100, 20);
-  doc.text("TAX INVOICE", marginR, 18, { align: "right" });
-  doc.setTextColor(0, 0, 0);
+  // RIGHT COLUMN: Invoice details
+  const invoiceFields: [string, string][] = [
+    ["Invoice No.", bill.billNumber],
+    [
+      "Invoice Dated",
+      bill.date
+        .toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        })
+        .replace(/\//g, "-"),
+    ],
+    ["Bill Type", "CREDIT"],
+    ["Despatch Through", ""],
+    ["Destination", ""],
+    ["LR-RR-No.", ""],
+    ["Vehicle No.", ""],
+  ];
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text("Bill No: ", marginR - 44, 26);
-  doc.setFont("helvetica", "bold");
-  doc.text(bill.billNumber, marginR, 26, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.text(
-    `Date: ${bill.date.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-    marginR,
-    31,
-    { align: "right" },
-  );
+  let rY = headerTopY + 5;
+  const labelX = rightColLeft + 3;
+  const valueX = bRight - 4;
 
-  // Bill To block
-  let billToY = 38;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(120, 100, 60);
-  doc.text("BILL TO", marginR - 55, billToY);
-  doc.setTextColor(0, 0, 0);
-  billToY += 4;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  if (bill.customerName) {
-    doc.text(bill.customerName, marginR, billToY, { align: "right" });
-    billToY += 4.5;
-  } else {
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(140, 120, 80);
-    doc.text("Walk-in Customer", marginR, billToY, { align: "right" });
-    doc.setTextColor(0, 0, 0);
-    billToY += 4.5;
-  }
-  if (bill.customerAddress) {
+  for (const [label, value] of invoiceFields) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    const addrLines = doc.splitTextToSize(bill.customerAddress, 55) as string[];
-    for (const line of addrLines) {
-      doc.text(line, marginR, billToY, { align: "right" });
-      billToY += 4;
+    doc.setTextColor(80, 80, 80);
+    doc.text(label, labelX, rY);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(0, 0, 0);
+    if (value) {
+      doc.text(value, valueX, rY, { align: "right" });
+    }
+    // Small divider line between fields
+    rY += 5.5;
+    if (rY < headerBottomY - 2) {
+      doc.setDrawColor(220, 220, 220);
+      doc.setLineWidth(0.1);
+      doc.line(rightColLeft + 2, rY - 1.5, bRight - 2, rY - 1.5);
+      doc.setDrawColor(0, 0, 0);
     }
   }
 
-  // Divider line
-  const headerBottom = Math.max(fromY + 4, billToY + 4, 52);
-  doc.setDrawColor(200, 170, 100);
-  doc.setLineWidth(0.4);
-  doc.line(marginL, headerBottom, marginR, headerBottom);
+  // Horizontal line below header
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
+  doc.line(bLeft, headerBottomY, bRight, headerBottomY);
 
-  // ── Section 3: Line-items table ──────────────────────────────────────────
-  const tableRows = bill.lineItems
-    .filter((it) => it.productId !== null)
-    .map((it, i) => [
-      i + 1,
-      it.productName,
-      it.hsn || "—",
-      it.quantity,
-      `${RS}${it.price.toFixed(2)}`,
-      `${it.gst}%`,
-      `${RS}${it.gstAmount.toFixed(2)}`,
-      `${RS}${it.amount.toFixed(2)}`,
-    ]);
+  // ── Billing parties section ────────────────────────────────────────────────
+  const billPartiesTopY = headerBottomY;
+  const billPartiesW = contentW * 0.55;
+  const billPartiesRight = bLeft + billPartiesW;
+  const shipLeftX = billPartiesRight;
+  const billPartiesBottomY = billPartiesTopY + 32;
+
+  // Vertical divider
+  doc.setLineWidth(0.3);
+  doc.line(
+    billPartiesRight,
+    billPartiesTopY,
+    billPartiesRight,
+    billPartiesBottomY,
+  );
+
+  // LEFT: Billing To
+  let btoY = billPartiesTopY + 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(0, 0, 0);
+  doc.text("To:", bLeft + 4, btoY);
+  btoY += 5;
+
+  const toName = bill.customerName || "Walk-in Customer";
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text(toName, bLeft + 4, btoY);
+  btoY += 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  if (bill.customerAddress) {
+    const addrLines = doc.splitTextToSize(
+      bill.customerAddress,
+      billPartiesW - 8,
+    ) as string[];
+    for (const line of addrLines) {
+      doc.text(line, bLeft + 4, btoY);
+      btoY += 4;
+    }
+  }
+  if (bill.customerPhone) {
+    doc.text(`Ph: ${bill.customerPhone}`, bLeft + 4, btoY);
+    btoY += 4;
+  }
+  if (bill.customerGstin) {
+    doc.setFont("helvetica", "bold");
+    doc.text(`GSTIN: ${bill.customerGstin}`, bLeft + 4, btoY);
+  }
+
+  // RIGHT: Ship To
+  let stoY = billPartiesTopY + 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.text("Ship To:", shipLeftX + 4, stoY);
+
+  // Horizontal line below billing parties
+  doc.setLineWidth(0.3);
+  doc.line(bLeft, billPartiesBottomY, bRight, billPartiesBottomY);
+
+  // ── Product table ──────────────────────────────────────────────────────────
+  const validItems = bill.lineItems.filter((it) => it.productId !== null);
+
+  const tableBody = validItems.map((it, i) => [
+    String(i + 1),
+    it.productName,
+    it.hsn || "",
+    `${it.gst}%`,
+    String(it.quantity),
+    `${RS}${it.price.toFixed(2)}`,
+    `${RS}${it.amount.toFixed(2)}`,
+  ]);
+
+  // Calculate CGST/SGST totals
+  const totalGst = validItems.reduce((s, it) => s + it.gstAmount, 0);
+  const cgst = totalGst / 2;
+  const sgst = totalGst / 2;
+
+  // Add summary rows
+  const cgstRow = ["", "CGST", "", "", "", "", `${RS}${cgst.toFixed(2)}`];
+  const sgstRow = ["", "SGST", "", "", "", "", `${RS}${sgst.toFixed(2)}`];
+  const totalRow = [
+    "",
+    "TOTAL",
+    "",
+    "",
+    "",
+    "",
+    `${RS}${bill.grandTotal.toFixed(2)}`,
+  ];
 
   autoTable(doc, {
-    startY: headerBottom + 4,
+    startY: billPartiesBottomY,
     head: [
       [
-        "#",
-        "Product Name",
-        "HSN",
-        "Qty",
-        "Unit Price",
-        "GST%",
-        "GST Amt",
-        "Total",
+        "S.No",
+        "Description of Goods",
+        "HSN Code",
+        "GST %",
+        "Quantity",
+        "Rate",
+        "Amount",
       ],
     ],
-    body: tableRows,
+    body: [...tableBody, cgstRow, sgstRow, totalRow],
     headStyles: {
-      fillColor: [180, 120, 30],
-      textColor: 255,
+      fillColor: [0, 0, 0],
+      textColor: [255, 255, 255],
       fontStyle: "bold",
       fontSize: 8,
+      halign: "center",
     },
-    alternateRowStyles: { fillColor: [255, 248, 235] },
+    alternateRowStyles: { fillColor: [245, 245, 245] },
     columnStyles: {
-      0: { halign: "center", cellWidth: 8 },
-      2: { halign: "center", cellWidth: 20 },
-      3: { halign: "center", cellWidth: 12 },
-      4: { halign: "right", cellWidth: 26 },
-      5: { halign: "center", cellWidth: 14 },
-      6: { halign: "right", cellWidth: 24 },
-      7: { halign: "right", cellWidth: 26 },
+      0: { halign: "center", cellWidth: 12 },
+      1: { halign: "left", cellWidth: 64 },
+      2: { halign: "center", cellWidth: 22 },
+      3: { halign: "center", cellWidth: 14 },
+      4: { halign: "center", cellWidth: 16 },
+      5: { halign: "right", cellWidth: 31 },
+      6: { halign: "right", cellWidth: 31 },
     },
-    styles: { fontSize: 9 },
-  });
-
-  const finalY =
-    (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable
-      .finalY + 6;
-
-  // ── Section 4: Totals (right-aligned) ────────────────────────────────────
-  const totalsX = 130;
-  const valX = marginR;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text("Subtotal:", totalsX, finalY);
-  doc.text(`${RS}${bill.subtotal.toFixed(2)}`, valX, finalY, {
-    align: "right",
-  });
-
-  doc.text("Total GST:", totalsX, finalY + 5.5);
-  doc.text(`${RS}${bill.totalGst.toFixed(2)}`, valX, finalY + 5.5, {
-    align: "right",
-  });
-
-  doc.setDrawColor(180, 120, 30);
-  doc.setLineWidth(0.3);
-  doc.line(totalsX, finalY + 8, valX, finalY + 8);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text("Grand Total:", totalsX, finalY + 14);
-  doc.text(`${RS}${bill.grandTotal.toFixed(2)}`, valX, finalY + 14, {
-    align: "right",
-  });
-  doc.setFont("helvetica", "normal");
-
-  // ── Sections 5 & 6: Bank details + Authorised Signature ──────────────────
-  const bottomY = finalY + 28;
-  const pageH = 297;
-  // Ensure bank/sig block fits — if too close to bottom, push down
-  const bankY = Math.min(bottomY, pageH - 50);
-
-  // Bank details (left side)
-  doc.setFontSize(8);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(120, 100, 60);
-  doc.text("BANK DETAILS", marginL, bankY);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  let bY = bankY + 5;
-  if (bill.settings) {
-    const rows: [string, string][] = [
-      ["Bank Name", bill.settings.bankName],
-      ["Account Holder", bill.settings.accountHolder],
-      ["Account No.", bill.settings.accountNumber],
-      ["IFSC Code", bill.settings.ifscCode],
-    ];
-    for (const [label, value] of rows) {
-      if (value) {
-        doc.setFont("helvetica", "bold");
-        doc.text(`${label}:`, marginL, bY);
-        doc.setFont("helvetica", "normal");
-        doc.text(value, marginL + 28, bY);
-        bY += 5;
+    styles: {
+      fontSize: 8.5,
+      cellPadding: 2,
+      lineColor: [0, 0, 0],
+      lineWidth: 0.3,
+      textColor: [0, 0, 0],
+    },
+    margin: { left: bLeft, right: pageW - bRight },
+    tableWidth: contentW,
+    didParseCell: (data) => {
+      // Bold CGST, SGST, TOTAL summary rows
+      const summaryStart = tableBody.length;
+      if (data.row.index >= summaryStart) {
+        data.cell.styles.fontStyle =
+          data.row.index === tableBody.length + 2 ? "bold" : "normal";
+        data.cell.styles.fillColor =
+          data.row.index === tableBody.length + 2
+            ? [230, 230, 230]
+            : [255, 255, 255];
       }
+    },
+  });
+
+  const afterTableY = (doc as unknown as { lastAutoTable: { finalY: number } })
+    .lastAutoTable.finalY;
+
+  // ── Tax summary table ──────────────────────────────────────────────────────
+  // Compute per-HSN breakdown
+  const hsnMap = new Map<
+    string,
+    { hsn: string; gstPct: number; taxableValue: number }
+  >();
+  for (const it of validItems) {
+    const key = `${it.hsn || "NIL"}-${it.gst}`;
+    const existing = hsnMap.get(key);
+    if (existing) {
+      existing.taxableValue += it.amount;
+    } else {
+      hsnMap.set(key, {
+        hsn: it.hsn || "NIL",
+        gstPct: it.gst,
+        taxableValue: it.amount,
+      });
     }
-  } else {
-    doc.setTextColor(160, 140, 100);
-    doc.text("(Bank details not configured)", marginL, bY);
-    doc.setTextColor(0, 0, 0);
   }
 
-  // Authorised Signature (right side)
-  const sigBoxX = 135;
-  const sigBoxW = marginR - sigBoxX;
-  const sigLineY = bankY + 22;
+  const hsnRows = Array.from(hsnMap.values()).map((row) => {
+    const centralRate = row.gstPct / 2;
+    const centralAmt = (row.taxableValue * centralRate) / 100;
+    const stateRate = centralRate;
+    const stateAmt = centralAmt;
+    const totalTaxAmt = centralAmt + stateAmt;
+    return [
+      row.hsn,
+      `${RS}${row.taxableValue.toFixed(2)}`,
+      `${centralRate.toFixed(1)}%`,
+      `${RS}${centralAmt.toFixed(2)}`,
+      `${stateRate.toFixed(1)}%`,
+      `${RS}${stateAmt.toFixed(2)}`,
+      `${RS}${totalTaxAmt.toFixed(2)}`,
+    ];
+  });
 
-  // Signatory name above line
+  // Total row for tax table
+  const totalTaxableValue = validItems.reduce((s, it) => s + it.amount, 0);
+  const totalCentralTax = cgst;
+  const totalStateTax = sgst;
+  const totalTaxTotal = totalCentralTax + totalStateTax;
+
+  const taxTotalRow = [
+    "Total",
+    `${RS}${totalTaxableValue.toFixed(2)}`,
+    "",
+    `${RS}${totalCentralTax.toFixed(2)}`,
+    "",
+    `${RS}${totalStateTax.toFixed(2)}`,
+    `${RS}${totalTaxTotal.toFixed(2)}`,
+  ];
+
+  // Amount in words rows
+  const grandTotalWords = numberToWords(Math.round(bill.grandTotal));
+  const taxWords = numberToWords(Math.round(totalTaxTotal));
+
+  autoTable(doc, {
+    startY: afterTableY,
+    head: [
+      [
+        "HSN Code",
+        "Taxable Value",
+        "Central Tax Rate %",
+        "Central Tax Amount",
+        "State Tax Rate %",
+        "State Tax Amount",
+        "Total Tax Amount",
+      ],
+    ],
+    body: [
+      [
+        {
+          content: `Rupees ${grandTotalWords} Only`,
+          colSpan: 7,
+          styles: {
+            fontStyle: "italic",
+            halign: "left",
+            fillColor: [240, 240, 240],
+          },
+        },
+      ],
+      ...hsnRows,
+      taxTotalRow.map((cell, i) => ({
+        content: cell,
+        styles: {
+          fontStyle: "bold" as const,
+          fillColor: [220, 220, 220] as [number, number, number],
+          halign: (i === 0 ? "left" : "right") as "left" | "right",
+        },
+      })),
+      [
+        {
+          content: `Tax Amount Rupees ${taxWords} Only`,
+          colSpan: 7,
+          styles: {
+            fontStyle: "italic",
+            halign: "left",
+            fillColor: [240, 240, 240],
+          },
+        },
+      ],
+    ],
+    headStyles: {
+      fillColor: [0, 25, 80],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 7,
+      halign: "center",
+    },
+    columnStyles: {
+      0: { halign: "center", cellWidth: 24 },
+      1: { halign: "right", cellWidth: 30 },
+      2: { halign: "center", cellWidth: 24 },
+      3: { halign: "right", cellWidth: 30 },
+      4: { halign: "center", cellWidth: 24 },
+      5: { halign: "right", cellWidth: 30 },
+      6: { halign: "right", cellWidth: 28 },
+    },
+    styles: {
+      fontSize: 7.5,
+      cellPadding: 2,
+      lineColor: [0, 0, 0],
+      lineWidth: 0.3,
+      textColor: [0, 0, 0],
+    },
+    margin: { left: bLeft, right: pageW - bRight },
+    tableWidth: contentW,
+  });
+
+  const afterTaxTableY = (
+    doc as unknown as { lastAutoTable: { finalY: number } }
+  ).lastAutoTable.finalY;
+
+  // ── Footer section ────────────────────────────────────────────────────────
+  // Ensure footer fits — if not enough space, push to bottom area
+  const footerTopY = Math.max(afterTaxTableY + 2, pageH - 55);
+
+  // Horizontal separator
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
+  doc.line(bLeft, footerTopY, bRight, footerTopY);
+
+  const footerLeftW = contentW * 0.55;
+  const footerRightX = bLeft + footerLeftW;
+
+  // Vertical divider in footer
+  const footerBottomY = footerTopY + 38;
+  doc.line(footerRightX, footerTopY, footerRightX, footerBottomY);
+
+  // LEFT: Bank details
+  let fY = footerTopY + 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(0, 0, 0);
+  doc.text("Bank Details:", bLeft + 4, fY);
+  fY += 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  if (bill.settings) {
+    if (bill.settings.bankName) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Bank Name: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(bill.settings.bankName, bLeft + 28, fY);
+      fY += 4.5;
+    }
+    if (bill.settings.accountNumber) {
+      doc.setFont("helvetica", "bold");
+      doc.text("A/c No: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(bill.settings.accountNumber, bLeft + 20, fY);
+      fY += 4.5;
+    }
+    if (bill.settings.bankName) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Branch: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(bill.settings.bankName, bLeft + 18, fY);
+      fY += 4.5;
+    }
+    if (bill.settings.ifscCode) {
+      doc.setFont("helvetica", "bold");
+      doc.text("IFSC: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(bill.settings.ifscCode, bLeft + 14, fY);
+    }
+  }
+
+  // RIGHT: Authorised signature
+  const sigAreaW = bRight - footerRightX;
+  const sigCenterX = footerRightX + sigAreaW / 2;
+  let sY = footerTopY + 5;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.text(`For ${companyName}`, sigCenterX, sY, { align: "center" });
+  sY += 18; // blank signature space
+
   const signatoryName = bill.settings?.authorisedSignatory ?? "";
   if (signatoryName) {
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text(signatoryName, sigBoxX + sigBoxW / 2, sigLineY - 4, {
-      align: "center",
-    });
+    doc.setFontSize(8.5);
+    doc.text(`(${signatoryName})`, sigCenterX, sY, { align: "center" });
+    sY += 4.5;
   }
-
-  // Signature line
-  doc.setDrawColor(100, 80, 40);
-  doc.setLineWidth(0.4);
-  doc.line(sigBoxX, sigLineY, sigBoxX + sigBoxW, sigLineY);
-
-  // "Authorised Signature" label below line
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
-  doc.setTextColor(120, 100, 60);
-  doc.text("Authorised Signature", sigBoxX + sigBoxW / 2, sigLineY + 5, {
-    align: "center",
-  });
-  doc.setTextColor(0, 0, 0);
+  doc.text("(Authorised Signature)", sigCenterX, sY, { align: "center" });
 
-  // ── Section 7: Footer ─────────────────────────────────────────────────────
-  const footerY = pageH - 10;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(140, 120, 80);
-  doc.setDrawColor(200, 170, 100);
+  // Bottom line
   doc.setLineWidth(0.3);
-  doc.line(marginL, footerY - 4, marginR, footerY - 4);
-  doc.text("Thank you for your business!", pageW / 2, footerY, {
+  doc.line(bLeft, footerBottomY, bRight, footerBottomY);
+
+  // E & O E and disclaimer
+  const eoeY = footerBottomY + 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(80, 80, 80);
+  doc.text("E & O E", bLeft + 4, eoeY);
+  doc.text("This is a computer generated invoice", pageW / 2, eoeY, {
     align: "center",
   });
 
@@ -504,6 +836,7 @@ export default function BillPage() {
     grandTotal: number;
     customerName: string;
     customerAddress: string;
+    customerPhone?: string;
   } | null>(null);
 
   const updateLineItem = useCallback(
@@ -523,7 +856,6 @@ export default function BillPage() {
     setLineItems((prev) => [...prev, createEmptyLineItem()]);
   }, []);
 
-  // Resolve selected customer
   const selectedCustomer: Customer | undefined = customers.find(
     (c) => c.id.toString() === selectedCustomerId,
   );
@@ -561,6 +893,7 @@ export default function BillPage() {
 
     const resolvedName = customerName.trim() || null;
     const resolvedAddress = selectedCustomer?.address?.trim() || null;
+    const resolvedPhone = selectedCustomer?.phone?.trim() || null;
     const resolvedId = selectedCustomer ? selectedCustomer.id : null;
 
     try {
@@ -578,6 +911,7 @@ export default function BillPage() {
         date: billDate,
         customerName: resolvedName ?? "",
         customerAddress: resolvedAddress ?? "",
+        customerPhone: resolvedPhone ?? undefined,
         lineItems: validItems,
         subtotal,
         totalGst,
@@ -594,6 +928,7 @@ export default function BillPage() {
         grandTotal,
         customerName: resolvedName ?? "",
         customerAddress: resolvedAddress ?? "",
+        customerPhone: resolvedPhone ?? undefined,
       });
       toast.success(`Bill ${bill.billNumber} saved & exported!`);
     } catch (err) {
@@ -652,6 +987,7 @@ export default function BillPage() {
                 date: savedBill.date,
                 customerName: savedBill.customerName,
                 customerAddress: savedBill.customerAddress,
+                customerPhone: savedBill.customerPhone,
                 lineItems: savedBill.validItems,
                 subtotal: savedBill.subtotal,
                 totalGst: savedBill.totalGst,
@@ -676,7 +1012,6 @@ export default function BillPage() {
       className="max-w-4xl mx-auto px-4 sm:px-6 py-8 space-y-6"
       data-ocid="bill.page"
     >
-      {/* Page heading */}
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 rounded-lg bg-primary/15 flex items-center justify-center">
           <Receipt className="w-5 h-5 text-primary" />
@@ -685,7 +1020,7 @@ export default function BillPage() {
           <h1 className="font-display text-2xl font-semibold text-foreground leading-tight">
             New Bill
           </h1>
-          <p className="text-xs text-muted-foreground">Cup Sambarani</p>
+          <p className="text-xs text-muted-foreground">VJ Traders</p>
         </div>
       </div>
 
@@ -698,7 +1033,6 @@ export default function BillPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Existing customer dropdown */}
           <div className="space-y-1.5">
             <Label htmlFor="customer-select" className="text-sm">
               Select Existing Customer{" "}
@@ -722,7 +1056,6 @@ export default function BillPage() {
             </select>
           </div>
 
-          {/* Manual name entry (shown when no customer selected) */}
           {!selectedCustomerId && (
             <div className="space-y-1.5">
               <Label htmlFor="customer-name" className="text-sm">
@@ -742,7 +1075,6 @@ export default function BillPage() {
             </div>
           )}
 
-          {/* Show address of selected customer */}
           {selectedCustomer && (
             <div className="bg-muted/40 rounded-lg px-4 py-3 space-y-0.5 max-w-sm">
               <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
@@ -776,7 +1108,6 @@ export default function BillPage() {
           </div>
         </CardHeader>
         <CardContent className="p-0">
-          {/* Column headers */}
           <div className="grid grid-cols-12 gap-2 px-6 py-2 bg-muted/40 text-xs font-semibold text-muted-foreground uppercase tracking-wide border-b border-border">
             <div className="col-span-1 text-center">#</div>
             <div className="col-span-4">Product</div>
@@ -785,8 +1116,6 @@ export default function BillPage() {
             <div className="col-span-2 text-right">Amount</div>
             <div className="col-span-1" />
           </div>
-
-          {/* Rows */}
           <div className="px-6">
             {productsLoading ? (
               <div className="py-4 space-y-2" data-ocid="bill.loading_state">
@@ -807,8 +1136,6 @@ export default function BillPage() {
               ))
             )}
           </div>
-
-          {/* Add row button */}
           <div className="px-6 py-3 border-t border-border bg-muted/20">
             <Button
               type="button"

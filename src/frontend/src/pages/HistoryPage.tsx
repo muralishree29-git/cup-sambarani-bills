@@ -56,10 +56,92 @@ function getMonthKey(nanoseconds: bigint): { key: string; label: string } {
   return { key, label };
 }
 
-// ─── PDF export (matches BillPage layout) ─────────────────────────────────────
-// Note: \u20B9 is ₹. Modern jsPDF with helvetica supports it via UTF-8.
-// If a square box appears, the PDF viewer lacks the glyph — use a full Unicode viewer.
-const RS = "\u20B9";
+// ─── Amount in words (Indian number system) ───────────────────────────────────
+function numberToWords(amount: number): string {
+  const ones = [
+    "",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+    "Eight",
+    "Nine",
+    "Ten",
+    "Eleven",
+    "Twelve",
+    "Thirteen",
+    "Fourteen",
+    "Fifteen",
+    "Sixteen",
+    "Seventeen",
+    "Eighteen",
+    "Nineteen",
+  ];
+  const tens = [
+    "",
+    "",
+    "Twenty",
+    "Thirty",
+    "Forty",
+    "Fifty",
+    "Sixty",
+    "Seventy",
+    "Eighty",
+    "Ninety",
+  ];
+
+  function twoDigits(n: number): string {
+    if (n < 20) return ones[n];
+    return `${tens[Math.floor(n / 10)]}${n % 10 !== 0 ? ` ${ones[n % 10]}` : ""}`;
+  }
+
+  function threeDigits(n: number): string {
+    if (n >= 100) {
+      return `${ones[Math.floor(n / 100)]} Hundred${n % 100 !== 0 ? ` ${twoDigits(n % 100)}` : ""}`;
+    }
+    return twoDigits(n);
+  }
+
+  const n = Math.round(amount);
+  if (n === 0) return "Zero";
+
+  const crore = Math.floor(n / 10000000);
+  const lakh = Math.floor((n % 10000000) / 100000);
+  const thousand = Math.floor((n % 100000) / 1000);
+  const remainder = n % 1000;
+
+  let result = "";
+  if (crore > 0) result += `${threeDigits(crore)} Crore `;
+  if (lakh > 0) result += `${threeDigits(lakh)} Lakh `;
+  if (thousand > 0) result += `${threeDigits(thousand)} Thousand `;
+  if (remainder > 0) result += threeDigits(remainder);
+
+  return result.trim();
+}
+
+// ─── PDF export (Tax Invoice format) ─────────────────────────────────────────
+const RS = "Rs. ";
+
+async function loadImageAsDataUrl(src: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("Canvas 2D context unavailable"));
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = reject;
+    img.src = src;
+  });
+}
 
 async function exportBillPDFFromHistory(
   bill: Bill,
@@ -68,229 +150,472 @@ async function exportBillPDFFromHistory(
   const { default: jsPDF } = await import("jspdf");
   const { default: autoTable } = await import("jspdf-autotable");
 
+  // Load peacock feather logo as base64 data URL
+  let logoDataUrl: string | null = null;
+  try {
+    logoDataUrl = await loadImageAsDataUrl(
+      "/assets/images/peacock-feather.png",
+    );
+  } catch {
+    // If logo fails to load, continue without it
+  }
+
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const pageW = 210;
-  const marginL = 14;
-  const marginR = pageW - 14;
+  const pageH = 297;
+  const bLeft = 10;
+  const bRight = 200;
+  const bTop = 10;
+  const contentW = bRight - bLeft;
 
-  // ── Section 1: FROM ────────────────────────────────────────────────────────
+  // ── Outer border ─────────────────────────────────────────────────────────
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.5);
+  doc.rect(bLeft, bTop, contentW, pageH - 20);
+
+  // ── TAX INVOICE title ────────────────────────────────────────────────────
+  const titleY = bTop + 8;
+
+  // Draw peacock feather logo (PNG image) to the left of the title
+  if (logoDataUrl) {
+    doc.addImage(logoDataUrl, "PNG", bLeft + 2, bTop + 1, 18, 18);
+  }
+
+  doc.setDrawColor(0, 0, 0);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.text(settings?.companyName ?? "Cup Sambarani", marginL, 18);
+  doc.setFontSize(14);
+  doc.setTextColor(0, 0, 0);
+  doc.text("TAX INVOICE", pageW / 2, titleY, { align: "center" });
+
+  const titleLineY = titleY + 3;
+  doc.setLineWidth(0.3);
+  doc.line(bLeft, titleLineY, bRight, titleLineY);
+
+  // ── Header: two columns ───────────────────────────────────────────────────
+  const headerTopY = titleLineY + 1;
+  const leftColW = contentW * 0.6;
+  const leftColRight = bLeft + leftColW;
+  const rightColLeft = leftColRight;
+  const headerBottomY = headerTopY + 42;
+
+  doc.setLineWidth(0.3);
+  doc.line(leftColRight, headerTopY, leftColRight, headerBottomY);
+
+  // LEFT COLUMN: Company info
+  const companyName = settings?.companyName ?? "VJ Traders";
+  let lY = headerTopY + 6;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text(companyName, bLeft + 4, lY);
+  lY += 6;
 
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  let fromY = 24;
+  doc.setFontSize(8.5);
   if (settings?.address) {
-    const addrLines = doc.splitTextToSize(settings.address, 85) as string[];
-    doc.text(addrLines, marginL, fromY);
-    fromY += addrLines.length * 4.5;
+    const addrLines = doc.splitTextToSize(
+      settings.address,
+      leftColW - 8,
+    ) as string[];
+    for (const line of addrLines) {
+      doc.text(line, bLeft + 4, lY);
+      lY += 4.5;
+    }
   }
   if (settings?.gstNumber) {
     doc.setFont("helvetica", "bold");
-    doc.text(`GSTIN: ${settings.gstNumber}`, marginL, fromY);
+    doc.text(`GSTIN: ${settings.gstNumber}`, bLeft + 4, lY);
     doc.setFont("helvetica", "normal");
-    fromY += 5;
   }
 
-  // ── Section 2: Bill header (top-right) ────────────────────────────────────
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(20);
-  doc.setTextColor(180, 100, 20);
-  doc.text("TAX INVOICE", marginR, 18, { align: "right" });
-  doc.setTextColor(0, 0, 0);
+  // RIGHT COLUMN: Invoice details
+  const billDate = toDate(bill.date);
+  const invoiceFields: [string, string][] = [
+    ["Invoice No.", bill.billNumber],
+    [
+      "Invoice Dated",
+      billDate
+        .toLocaleDateString("en-IN", {
+          day: "2-digit",
+          month: "2-digit",
+          year: "numeric",
+        })
+        .replace(/\//g, "-"),
+    ],
+    ["Bill Type", "CREDIT"],
+    ["Despatch Through", ""],
+    ["Destination", ""],
+    ["LR-RR-No.", ""],
+    ["Vehicle No.", ""],
+  ];
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text("Bill No: ", marginR - 44, 26);
-  doc.setFont("helvetica", "bold");
-  doc.text(bill.billNumber, marginR, 26, { align: "right" });
-  doc.setFont("helvetica", "normal");
-  doc.text(
-    `Date: ${toDate(bill.date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}`,
-    marginR,
-    31,
-    { align: "right" },
-  );
+  let rY = headerTopY + 5;
+  const labelX = rightColLeft + 3;
+  const valueX = bRight - 4;
 
-  // Bill To block
-  let billToY = 38;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(120, 100, 60);
-  doc.text("BILL TO", marginR - 55, billToY);
-  doc.setTextColor(0, 0, 0);
-  billToY += 4;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  if (bill.customerName) {
-    doc.text(bill.customerName, marginR, billToY, { align: "right" });
-    billToY += 4.5;
-  } else {
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(140, 120, 80);
-    doc.text("Walk-in Customer", marginR, billToY, { align: "right" });
-    doc.setTextColor(0, 0, 0);
-    billToY += 4.5;
-  }
-  if (bill.customerAddress) {
+  for (const [label, value] of invoiceFields) {
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    const addrLines = doc.splitTextToSize(bill.customerAddress, 55) as string[];
-    for (const line of addrLines) {
-      doc.text(line, marginR, billToY, { align: "right" });
-      billToY += 4;
+    doc.setTextColor(80, 80, 80);
+    doc.text(label, labelX, rY);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(0, 0, 0);
+    if (value) doc.text(value, valueX, rY, { align: "right" });
+    rY += 5.5;
+    if (rY < headerBottomY - 2) {
+      doc.setDrawColor(220, 220, 220);
+      doc.setLineWidth(0.1);
+      doc.line(rightColLeft + 2, rY - 1.5, bRight - 2, rY - 1.5);
+      doc.setDrawColor(0, 0, 0);
     }
   }
 
-  const headerBottom = Math.max(fromY + 4, billToY + 4, 52);
-  doc.setDrawColor(200, 170, 100);
-  doc.setLineWidth(0.4);
-  doc.line(marginL, headerBottom, marginR, headerBottom);
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
+  doc.line(bLeft, headerBottomY, bRight, headerBottomY);
 
-  // ── Section 3: Line-items table ───────────────────────────────────────────
-  const tableRows = bill.lineItems.map((it: LineItem, i: number) => [
-    i + 1,
+  // ── Billing parties section ────────────────────────────────────────────────
+  const billPartiesTopY = headerBottomY;
+  const billPartiesW = contentW * 0.55;
+  const billPartiesRight = bLeft + billPartiesW;
+  const shipLeftX = billPartiesRight;
+  const billPartiesBottomY = billPartiesTopY + 32;
+
+  doc.setLineWidth(0.3);
+  doc.line(
+    billPartiesRight,
+    billPartiesTopY,
+    billPartiesRight,
+    billPartiesBottomY,
+  );
+
+  let btoY = billPartiesTopY + 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(0, 0, 0);
+  doc.text("To:", bLeft + 4, btoY);
+  btoY += 5;
+
+  const toName = bill.customerName || "Walk-in Customer";
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(9);
+  doc.text(toName, bLeft + 4, btoY);
+  btoY += 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  if (bill.customerAddress) {
+    const addrLines = doc.splitTextToSize(
+      bill.customerAddress,
+      billPartiesW - 8,
+    ) as string[];
+    for (const line of addrLines) {
+      doc.text(line, bLeft + 4, btoY);
+      btoY += 4;
+    }
+  }
+
+  // Ship To header
+  let stoY = billPartiesTopY + 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.text("Ship To:", shipLeftX + 4, stoY);
+
+  doc.setLineWidth(0.3);
+  doc.line(bLeft, billPartiesBottomY, bRight, billPartiesBottomY);
+
+  // ── Product table ──────────────────────────────────────────────────────────
+  const tableBody = bill.lineItems.map((it: LineItem, i: number) => [
+    String(i + 1),
     it.productName,
-    it.hsn || "—",
-    Number(it.quantity),
-    `${RS}${(Number(it.price) / 100).toFixed(2)}`,
+    it.hsn || "",
     `${Number(it.gst)}%`,
-    `${RS}${(Number(it.gstAmount) / 100).toFixed(2)}`,
+    String(Number(it.quantity)),
+    `${RS}${(Number(it.price) / 100).toFixed(2)}`,
     `${RS}${(Number(it.amount) / 100).toFixed(2)}`,
   ]);
 
-  autoTable(doc, {
-    startY: headerBottom + 4,
-    head: [
-      [
-        "#",
-        "Product Name",
-        "HSN",
-        "Qty",
-        "Unit Price",
-        "GST%",
-        "GST Amt",
-        "Total",
-      ],
-    ],
-    body: tableRows,
-    headStyles: {
-      fillColor: [180, 120, 30],
-      textColor: 255,
-      fontStyle: "bold",
-      fontSize: 8,
-    },
-    alternateRowStyles: { fillColor: [255, 248, 235] },
-    columnStyles: {
-      0: { halign: "center", cellWidth: 8 },
-      2: { halign: "center", cellWidth: 20 },
-      3: { halign: "center", cellWidth: 12 },
-      4: { halign: "right", cellWidth: 26 },
-      5: { halign: "center", cellWidth: 14 },
-      6: { halign: "right", cellWidth: 24 },
-      7: { halign: "right", cellWidth: 26 },
-    },
-    styles: { fontSize: 9 },
-  });
-
-  const finalY =
-    (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable
-      .finalY + 6;
-
-  // ── Section 4: Totals ─────────────────────────────────────────────────────
-  const totalsX = 130;
-  const valX = marginR;
-  const subtotalAmt = Number(bill.subtotal) / 100;
-  const gstAmt = Number(bill.gstAmount) / 100;
+  const totalGstAmt = Number(bill.gstAmount) / 100;
+  const cgst = totalGstAmt / 2;
+  const sgst = totalGstAmt / 2;
   const grandTotalAmt = Number(bill.grandTotal) / 100;
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text("Subtotal:", totalsX, finalY);
-  doc.text(`${RS}${subtotalAmt.toFixed(2)}`, valX, finalY, { align: "right" });
+  const cgstRow = ["", "CGST", "", "", "", "", `${RS}${cgst.toFixed(2)}`];
+  const sgstRow = ["", "SGST", "", "", "", "", `${RS}${sgst.toFixed(2)}`];
+  const totalRow = [
+    "",
+    "TOTAL",
+    "",
+    "",
+    "",
+    "",
+    `${RS}${grandTotalAmt.toFixed(2)}`,
+  ];
 
-  doc.text("Total GST:", totalsX, finalY + 5.5);
-  doc.text(`${RS}${gstAmt.toFixed(2)}`, valX, finalY + 5.5, { align: "right" });
-
-  doc.setDrawColor(180, 120, 30);
-  doc.setLineWidth(0.3);
-  doc.line(totalsX, finalY + 8, valX, finalY + 8);
-
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(11);
-  doc.text("Grand Total:", totalsX, finalY + 14);
-  doc.text(`${RS}${grandTotalAmt.toFixed(2)}`, valX, finalY + 14, {
-    align: "right",
-  });
-  doc.setFont("helvetica", "normal");
-
-  // ── Section 5 & 6: Bank details + Authorised Signature ───────────────────
-  const bottomY = finalY + 28;
-  const pageH = 297;
-  const bankY = Math.min(bottomY, pageH - 50);
-
-  doc.setFontSize(8);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(120, 100, 60);
-  doc.text("BANK DETAILS", marginL, bankY);
-  doc.setTextColor(0, 0, 0);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  let bY = bankY + 5;
-  if (settings) {
-    const rows: [string, string][] = [
-      ["Bank Name", settings.bankName],
-      ["Account Holder", settings.accountHolder],
-      ["Account No.", settings.accountNumber],
-      ["IFSC Code", settings.ifscCode],
-    ];
-    for (const [label, value] of rows) {
-      if (value) {
-        doc.setFont("helvetica", "bold");
-        doc.text(`${label}:`, marginL, bY);
-        doc.setFont("helvetica", "normal");
-        doc.text(value, marginL + 28, bY);
-        bY += 5;
+  autoTable(doc, {
+    startY: billPartiesBottomY,
+    head: [
+      [
+        "S.No",
+        "Description of Goods",
+        "HSN Code",
+        "GST %",
+        "Quantity",
+        "Rate",
+        "Amount",
+      ],
+    ],
+    body: [...tableBody, cgstRow, sgstRow, totalRow],
+    headStyles: {
+      fillColor: [0, 0, 0],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 8,
+      halign: "center",
+    },
+    alternateRowStyles: { fillColor: [245, 245, 245] },
+    columnStyles: {
+      0: { halign: "center", cellWidth: 12 },
+      1: { halign: "left", cellWidth: 64 },
+      2: { halign: "center", cellWidth: 22 },
+      3: { halign: "center", cellWidth: 14 },
+      4: { halign: "center", cellWidth: 16 },
+      5: { halign: "right", cellWidth: 31 },
+      6: { halign: "right", cellWidth: 31 },
+    },
+    styles: {
+      fontSize: 8.5,
+      cellPadding: 2,
+      lineColor: [0, 0, 0],
+      lineWidth: 0.3,
+      textColor: [0, 0, 0],
+    },
+    margin: { left: bLeft, right: pageW - bRight },
+    tableWidth: contentW,
+    didParseCell: (data) => {
+      const summaryStart = tableBody.length;
+      if (data.row.index >= summaryStart) {
+        data.cell.styles.fontStyle =
+          data.row.index === tableBody.length + 2 ? "bold" : "normal";
+        data.cell.styles.fillColor =
+          data.row.index === tableBody.length + 2
+            ? [230, 230, 230]
+            : [255, 255, 255];
       }
+    },
+  });
+
+  const afterTableY = (doc as unknown as { lastAutoTable: { finalY: number } })
+    .lastAutoTable.finalY;
+
+  // ── Tax summary table ──────────────────────────────────────────────────────
+  const hsnMap = new Map<
+    string,
+    { hsn: string; gstPct: number; taxableValue: number }
+  >();
+  for (const it of bill.lineItems) {
+    const gstPct = Number(it.gst);
+    const key = `${it.hsn || "NIL"}-${gstPct}`;
+    const existing = hsnMap.get(key);
+    const itemAmt = Number(it.amount) / 100;
+    if (existing) {
+      existing.taxableValue += itemAmt;
+    } else {
+      hsnMap.set(key, { hsn: it.hsn || "NIL", gstPct, taxableValue: itemAmt });
     }
-  } else {
-    doc.setTextColor(160, 140, 100);
-    doc.text("(Bank details not configured)", marginL, bY);
-    doc.setTextColor(0, 0, 0);
   }
 
-  const sigBoxX = 135;
-  const sigBoxW = marginR - sigBoxX;
-  const sigLineY = bankY + 22;
+  const hsnRows = Array.from(hsnMap.values()).map((row) => {
+    const centralRate = row.gstPct / 2;
+    const centralAmt = (row.taxableValue * centralRate) / 100;
+    const stateAmt = centralAmt;
+    const totalTaxAmt = centralAmt + stateAmt;
+    return [
+      row.hsn,
+      `${RS}${row.taxableValue.toFixed(2)}`,
+      `${centralRate.toFixed(1)}%`,
+      `${RS}${centralAmt.toFixed(2)}`,
+      `${centralRate.toFixed(1)}%`,
+      `${RS}${stateAmt.toFixed(2)}`,
+      `${RS}${totalTaxAmt.toFixed(2)}`,
+    ];
+  });
+
+  const totalTaxableValue = Number(bill.subtotal) / 100;
+  const totalTaxTotal = cgst + sgst;
+
+  const taxTotalRow = [
+    "Total",
+    `${RS}${totalTaxableValue.toFixed(2)}`,
+    "",
+    `${RS}${cgst.toFixed(2)}`,
+    "",
+    `${RS}${sgst.toFixed(2)}`,
+    `${RS}${totalTaxTotal.toFixed(2)}`,
+  ];
+
+  const grandTotalWords = numberToWords(Math.round(grandTotalAmt));
+  const taxWords = numberToWords(Math.round(totalTaxTotal));
+
+  autoTable(doc, {
+    startY: afterTableY,
+    head: [
+      [
+        "HSN Code",
+        "Taxable Value",
+        "Central Tax Rate %",
+        "Central Tax Amount",
+        "State Tax Rate %",
+        "State Tax Amount",
+        "Total Tax Amount",
+      ],
+    ],
+    body: [
+      [
+        {
+          content: `Rupees ${grandTotalWords} Only`,
+          colSpan: 7,
+          styles: {
+            fontStyle: "italic",
+            halign: "left",
+            fillColor: [240, 240, 240],
+          },
+        },
+      ],
+      ...hsnRows,
+      taxTotalRow.map((cell, i) => ({
+        content: cell,
+        styles: {
+          fontStyle: "bold" as const,
+          fillColor: [220, 220, 220] as [number, number, number],
+          halign: (i === 0 ? "left" : "right") as "left" | "right",
+        },
+      })),
+      [
+        {
+          content: `Tax Amount Rupees ${taxWords} Only`,
+          colSpan: 7,
+          styles: {
+            fontStyle: "italic",
+            halign: "left",
+            fillColor: [240, 240, 240],
+          },
+        },
+      ],
+    ],
+    headStyles: {
+      fillColor: [0, 25, 80],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 7,
+      halign: "center",
+    },
+    columnStyles: {
+      0: { halign: "center", cellWidth: 24 },
+      1: { halign: "right", cellWidth: 30 },
+      2: { halign: "center", cellWidth: 24 },
+      3: { halign: "right", cellWidth: 30 },
+      4: { halign: "center", cellWidth: 24 },
+      5: { halign: "right", cellWidth: 30 },
+      6: { halign: "right", cellWidth: 28 },
+    },
+    styles: {
+      fontSize: 7.5,
+      cellPadding: 2,
+      lineColor: [0, 0, 0],
+      lineWidth: 0.3,
+      textColor: [0, 0, 0],
+    },
+    margin: { left: bLeft, right: pageW - bRight },
+    tableWidth: contentW,
+  });
+
+  const afterTaxTableY = (
+    doc as unknown as { lastAutoTable: { finalY: number } }
+  ).lastAutoTable.finalY;
+
+  // ── Footer section ─────────────────────────────────────────────────────────
+  const footerTopY = Math.max(afterTaxTableY + 2, pageH - 55);
+
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
+  doc.line(bLeft, footerTopY, bRight, footerTopY);
+
+  const footerLeftW = contentW * 0.55;
+  const footerRightX = bLeft + footerLeftW;
+  const footerBottomY = footerTopY + 38;
+
+  doc.line(footerRightX, footerTopY, footerRightX, footerBottomY);
+
+  // LEFT: Bank details
+  let fY = footerTopY + 5;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(0, 0, 0);
+  doc.text("Bank Details:", bLeft + 4, fY);
+  fY += 5;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  if (settings) {
+    if (settings.bankName) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Bank Name: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(settings.bankName, bLeft + 28, fY);
+      fY += 4.5;
+    }
+    if (settings.accountNumber) {
+      doc.setFont("helvetica", "bold");
+      doc.text("A/c No: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(settings.accountNumber, bLeft + 20, fY);
+      fY += 4.5;
+    }
+    if (settings.bankName) {
+      doc.setFont("helvetica", "bold");
+      doc.text("Branch: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(settings.bankName, bLeft + 18, fY);
+      fY += 4.5;
+    }
+    if (settings.ifscCode) {
+      doc.setFont("helvetica", "bold");
+      doc.text("IFSC: ", bLeft + 4, fY);
+      doc.setFont("helvetica", "normal");
+      doc.text(settings.ifscCode, bLeft + 14, fY);
+    }
+  }
+
+  // RIGHT: Authorised signature
+  const sigAreaW = bRight - footerRightX;
+  const sigCenterX = footerRightX + sigAreaW / 2;
+  let sY = footerTopY + 5;
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.text(`For ${companyName}`, sigCenterX, sY, { align: "center" });
+  sY += 18;
+
   const signatoryName = settings?.authorisedSignatory ?? "";
   if (signatoryName) {
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text(signatoryName, sigBoxX + sigBoxW / 2, sigLineY - 4, {
-      align: "center",
-    });
+    doc.setFontSize(8.5);
+    doc.text(`(${signatoryName})`, sigCenterX, sY, { align: "center" });
+    sY += 4.5;
   }
-  doc.setDrawColor(100, 80, 40);
-  doc.setLineWidth(0.4);
-  doc.line(sigBoxX, sigLineY, sigBoxX + sigBoxW, sigLineY);
   doc.setFont("helvetica", "bold");
   doc.setFontSize(8);
-  doc.setTextColor(120, 100, 60);
-  doc.text("Authorised Signature", sigBoxX + sigBoxW / 2, sigLineY + 5, {
-    align: "center",
-  });
-  doc.setTextColor(0, 0, 0);
+  doc.text("(Authorised Signature)", sigCenterX, sY, { align: "center" });
 
-  // ── Section 7: Footer ─────────────────────────────────────────────────────
-  const footerY = pageH - 10;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  doc.setTextColor(140, 120, 80);
-  doc.setDrawColor(200, 170, 100);
   doc.setLineWidth(0.3);
-  doc.line(marginL, footerY - 4, marginR, footerY - 4);
-  doc.text("Thank you for your business!", pageW / 2, footerY, {
+  doc.line(bLeft, footerBottomY, bRight, footerBottomY);
+
+  const eoeY = footerBottomY + 5;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(80, 80, 80);
+  doc.text("E & O E", bLeft + 4, eoeY);
+  doc.text("This is a computer generated invoice", pageW / 2, eoeY, {
     align: "center",
   });
 
@@ -308,7 +633,6 @@ function BillDetail({
       className="bg-background border border-border rounded-lg p-4 mt-1 mb-2 shadow-warm"
       data-ocid="history.bill_detail"
     >
-      {/* Header row */}
       <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
         <div>
           <p className="text-xs text-muted-foreground uppercase tracking-wide font-semibold mb-1">
@@ -442,9 +766,7 @@ function BillRow({
   return (
     <>
       <tr
-        className={`border-b border-border cursor-pointer transition-smooth hover:bg-muted/40 ${
-          isExpanded ? "bg-primary/5" : ""
-        }`}
+        className={`border-b border-border cursor-pointer transition-smooth hover:bg-muted/40 ${isExpanded ? "bg-primary/5" : ""}`}
         onClick={onToggle}
         onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && onToggle()}
         tabIndex={0}
@@ -603,10 +925,7 @@ export default function HistoryPage() {
 
   const isFiltered = selectedMonth !== ALL_MONTHS;
   const countLabel = isFiltered
-    ? `Showing ${filtered.length} ${filtered.length === 1 ? "bill" : "bills"} in ${
-        monthOptions.find((m) => m.key === selectedMonth)?.label ??
-        selectedMonth
-      }`
+    ? `Showing ${filtered.length} ${filtered.length === 1 ? "bill" : "bills"} in ${monthOptions.find((m) => m.key === selectedMonth)?.label ?? selectedMonth}`
     : `Showing all ${sorted.length} ${sorted.length === 1 ? "bill" : "bills"}`;
 
   return (
@@ -614,7 +933,6 @@ export default function HistoryPage() {
       className="max-w-5xl mx-auto px-4 sm:px-6 py-8"
       data-ocid="history.page"
     >
-      {/* Page heading */}
       <div className="mb-6">
         <h1 className="font-display text-3xl font-bold text-foreground">
           Bill History
@@ -624,7 +942,6 @@ export default function HistoryPage() {
         </p>
       </div>
 
-      {/* Filter bar */}
       {!isLoading && !error && sorted.length > 0 && (
         <div className="flex flex-wrap items-center gap-4 mb-5">
           <div className="flex items-center gap-2">
@@ -652,7 +969,6 @@ export default function HistoryPage() {
               </SelectContent>
             </Select>
           </div>
-
           <Badge
             variant="secondary"
             className="bg-primary/10 text-primary border-primary/20 px-3 py-1 text-sm"
@@ -663,7 +979,6 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {/* Content */}
       {isLoading ? (
         <LoadingSkeleton />
       ) : error ? (

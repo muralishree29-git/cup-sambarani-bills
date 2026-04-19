@@ -8,9 +8,9 @@ import CatalogMixin "mixins/catalog-api";
 import BillingMixin "mixins/billing-api";
 import CustomersMixin "mixins/customers-api";
 import SettingsMixin "mixins/settings-api";
-import Migration "migration";
 
-(with migration = Migration.run)
+
+
 actor {
   let products = Map.empty<Common.ProductId, CatalogTypes.Product>();
   let nextProductId = { var value : Nat = 0 };

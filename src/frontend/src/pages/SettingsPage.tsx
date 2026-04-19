@@ -163,7 +163,7 @@ export default function SettingsPage() {
                 <Input
                   id="s-company-name"
                   data-ocid="settings.company_name_input"
-                  placeholder="e.g. Cup Sambarani Trading Co."
+                  placeholder="e.g. VJ Traders"
                   value={form.companyName}
                   onChange={(e) => handleChange("companyName", e.target.value)}
                   required
@@ -273,7 +273,7 @@ export default function SettingsPage() {
                 <Input
                   id="s-account-holder"
                   data-ocid="settings.account_holder_input"
-                  placeholder="e.g. Cup Sambarani Trading Co."
+                  placeholder="e.g. VJ Traders"
                   value={form.accountHolder}
                   onChange={(e) =>
                     handleChange("accountHolder", e.target.value)

@@ -1,4 +1,4 @@
-// Version: 3.0.0
+// Version: 1.0.0
 type BillId__994444545 = Nat;
 type Bill__951628961 =
   {
@@ -32,35 +32,10 @@ type LineItem__285514535 =
     productName : Text;
     quantity : Nat
   };
-type Map__158565046<K, V> = Map__297112838<K, V>;
-type Map__297112838<K, V> =
-  {var root : Node__46230540<K, V>; var size : Nat__490723111};
-type Map__605269027<K, V> = Map__158565046<K, V>;
 type Nat__490723111 = Nat__920180692;
 type Nat__920180692 = Nat;
 type Node__46230540<K, V> =
   {#internal : Internal__8484328<K, V>; #leaf : Leaf__809889148<K, V>};
-type OldBill__814045144 =
-  {
-    billNumber : Text;
-    customerName : ?Text;
-    date : Timestamp__301639476;
-    grandTotal : Nat;
-    gstAmount : Nat;
-    id : BillId__994444545;
-    lineItems : [OldLineItem__227633377];
-    subtotal : Nat
-  };
-type OldLineItem__227633377 =
-  {
-    amount : Nat;
-    price : Nat;
-    productId : ProductId__160010635;
-    productName : Text;
-    quantity : Nat
-  };
-type OldProduct__278484740 =
-  {id : ProductId__160010635; name : Text; price : Nat; stock : Nat};
 type ProducerSettings__603867605 =
   {
     accountHolder : Text;
@@ -83,14 +58,7 @@ type Product__389207432 =
     stock : Nat
   };
 type Timestamp__301639476 = Int;
-actor ({
-  in bills : Map__605269027<BillId__994444545, OldBill__814045144>;
-  in lastBillMonth : {var value : Text};
-  in monthlyBillCounter : {var value : Nat};
-  in nextBillId : {var value : Nat};
-  in nextProductId : {var value : Nat};
-  in products : Map__605269027<ProductId__160010635, OldProduct__278484740>
-}, {
+actor {
   stable bills :
     {
       var root : Node__46230540<BillId__994444545, Bill__951628961>;
@@ -112,4 +80,4 @@ actor ({
       var root : Node__46230540<ProductId__160010635, Product__389207432>;
       var size : Nat__490723111
     }
-}) ;
+};

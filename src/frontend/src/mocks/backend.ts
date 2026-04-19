@@ -1,14 +1,14 @@
 import type { backendInterface, Product, Bill, LineItem, Customer, ProducerSettings } from "../backend";
 
 const sampleProducts: Product[] = [
-  { id: BigInt(1), name: "Cup Sambarani - Regular", price: BigInt(15000), stock: BigInt(100), gst: BigInt(18), hsn: "3307" },
-  { id: BigInt(2), name: "Cup Sambarani - Large", price: BigInt(25000), stock: BigInt(50), gst: BigInt(18), hsn: "3307" },
+  { id: BigInt(1), name: "VJ Traders - Regular Pack", price: BigInt(15000), stock: BigInt(100), gst: BigInt(18), hsn: "3307" },
+  { id: BigInt(2), name: "VJ Traders - Large Pack", price: BigInt(25000), stock: BigInt(50), gst: BigInt(18), hsn: "3307" },
   { id: BigInt(3), name: "Sambrani Sticks - Pack of 10", price: BigInt(8000), stock: BigInt(200), gst: BigInt(18), hsn: "3307" },
 ];
 
 const sampleLineItem: LineItem = {
   productId: BigInt(1),
-  productName: "Cup Sambarani - Regular",
+  productName: "VJ Traders - Regular Pack",
   quantity: BigInt(2),
   price: BigInt(15000),
   amount: BigInt(30000),
@@ -36,7 +36,7 @@ const sampleCustomer: Customer = {
 };
 
 const defaultSettings: ProducerSettings = {
-  companyName: "Cup Sambarani",
+  companyName: "VJ Traders",
   address: "",
   gstNumber: "",
   bankName: "",

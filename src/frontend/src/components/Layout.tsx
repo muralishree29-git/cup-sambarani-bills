@@ -11,58 +11,6 @@ import {
   Users,
 } from "lucide-react";
 
-function CupSambraniIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={className}
-      aria-hidden="true"
-    >
-      <path
-        d="M9 7 C9 5, 7.5 4.5, 7.5 3 C7.5 4.5, 9 5, 9 6.5"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        fill="none"
-        opacity="0.7"
-      />
-      <path
-        d="M12 5 C12 3, 10.5 2.5, 10.5 1 C10.5 2.5, 12 3, 12 4.5"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        fill="none"
-        opacity="0.9"
-      />
-      <path
-        d="M15 7 C15 5, 13.5 4.5, 13.5 3 C13.5 4.5, 15 5, 15 6.5"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinecap="round"
-        fill="none"
-        opacity="0.7"
-      />
-      <path
-        d="M7 10 L8.5 19 H15.5 L17 10 Z"
-        fill="currentColor"
-        opacity="0.9"
-      />
-      <rect x="6" y="9" width="12" height="2" rx="1" fill="currentColor" />
-      <rect x="9" y="19" width="6" height="1.5" rx="0.75" fill="currentColor" />
-      <rect
-        x="8"
-        y="20.5"
-        width="8"
-        height="1.5"
-        rx="0.75"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
-
 interface LayoutProps {
   children: React.ReactNode;
 }
@@ -101,11 +49,15 @@ export function Layout({ children }: LayoutProps) {
             className="flex items-center gap-2.5 group"
             data-ocid="nav.home_link"
           >
-            <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center shadow-xs transition-smooth group-hover:scale-105">
-              <CupSambraniIcon className="w-5 h-5 text-primary-foreground" />
+            <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center transition-smooth group-hover:scale-105 overflow-hidden">
+              <img
+                src="/assets/images/peacock-feather.png"
+                alt="VJ Traders Logo"
+                className="w-7 h-7 object-contain"
+              />
             </div>
             <span className="font-display text-lg font-semibold text-foreground tracking-tight">
-              Cup Sambarani
+              VJ Traders
             </span>
           </Link>
 
